@@ -1,11 +1,13 @@
 """
 BTCUSDT PERP — Smart Money POC Sinyalleri → Telegram
+Tek fiyat seviyesinde 150 BTC+ alım VEYA satım → sinyal
 Çalıştır: python poc_sinyal.py
 """
 
 import asyncio
 import json
 import logging
+import time
 from collections import defaultdict, deque
 
 import aiohttp
@@ -14,12 +16,13 @@ import websockets
 # ══════════════════════════════════════════════
 #  AYARLAR — sadece buraya dokun
 # ══════════════════════════════════════════════
-TELEGRAM_TOKEN  = "8724532574:AAFqpq8GmEpicc1oKfYfnYNMo7AExT8Y14U"
-TELEGRAM_CHAT   = "7133383868"
-SEMBOL          = "btcusdt"          # küçük harf
-INTERVAL        = "5m"              # 1m 3m 5m 15m 1h
-ALERT_COOLDOWN  = 60                 # aynı sinyali kaç saniyede bir tekrarla
-MIN_ALIS_HACIM  = 150                # alım VEYA satım tarafı için minimum BTC hacmi
+TELEGRAM_TOKEN   = "8724532574:AAFqpq8GmEpicc1oKfYfnYNMo7AExT8Y14U"
+TELEGRAM_CHAT    = "7133383868"
+SEMBOL           = "btcusdt"
+INTERVAL         = "5m"
+ALERT_COOLDOWN   = 60        # aynı sinyali kaç saniyede bir tekrarla
+MIN_SEVIYE_HACIM = 150       # tek fiyat seviyesinde min BTC (alım VEYA satım)
+TICK_SIZE        = 0.10      # BTC fiyat adımı (10 cent = bir seviye)
 # ══════════════════════════════════════════════
 
 logging.basicConfig(
@@ -29,31 +32,30 @@ logging.basicConfig(
 )
 log = logging.getLogger()
 
-# ── Durum ─────────────────────────────────────
-bars          = deque(maxlen=50)
-tick_prices   = []
-tick_buys     = []
-tick_sells    = []
-last_alert    = 0.0
+bars        = deque(maxlen=50)
+seviye_hacim: dict = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
+last_alert  = 0.0
 
 
-# ── POC hesapla ───────────────────────────────
-def poc_hesapla(prices, buys, sells):
-    if not prices:
+def seviyele(fiyat: float) -> float:
+    return round(round(fiyat / TICK_SIZE) * TICK_SIZE, 2)
+
+
+def poc_hesapla(seviyeler: dict) -> float:
+    if not seviyeler:
         return 0.0
-    lo, hi = min(prices), max(prices)
-    if hi == lo:
-        return hi
-    step = (hi - lo) / 20
-    kovalar = defaultdict(float)
-    for p, b, s in zip(prices, buys, sells):
-        i = min(int((p - lo) / step), 19)
-        kovalar[i] += b + s
-    en_iyi = max(kovalar, key=kovalar.get)
-    return round(lo + (en_iyi + 0.5) * step, 2)
+    poc = max(seviyeler, key=lambda s: seviyeler[s]["buy"] + seviyeler[s]["sell"])
+    return poc
 
 
-# ── Telegram gönder ───────────────────────────
+def max_seviye_hacim(seviyeler: dict):
+    if not seviyeler:
+        return 0.0, 0.0
+    max_buy  = max(v["buy"]  for v in seviyeler.values())
+    max_sell = max(v["sell"] for v in seviyeler.values())
+    return max_buy, max_sell
+
+
 async def telegram(session, mesaj):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
@@ -62,15 +64,13 @@ async def telegram(session, mesaj):
             "text": mesaj,
             "parse_mode": "HTML",
         })
-        log.info(f"📨 Telegram: {mesaj[:60]}")
+        log.info(f"📨 Telegram: {mesaj[:80]}")
     except Exception as e:
         log.warning(f"Telegram hatası: {e}")
 
 
-# ── Sinyal üret ───────────────────────────────
 async def sinyal_kontrol(session):
     global last_alert
-    import time
 
     if len(bars) < 3:
         return
@@ -79,52 +79,55 @@ async def sinyal_kontrol(session):
 
     curr, prev, prev2 = bars[-1], bars[-2], bars[-3]
 
-    # Alım VEYA satım tarafından biri 150 BTC üzerindeyse sinyal gönder
-    satis_hacim = curr["vol"] - curr["buy_vol"]
-    if curr["buy_vol"] < MIN_ALIS_HACIM and satis_hacim < MIN_ALIS_HACIM:
+    max_buy_sev  = curr["max_buy_sev"]
+    max_sell_sev = curr["max_sell_sev"]
+
+    if max_buy_sev < MIN_SEVIYE_HACIM and max_sell_sev < MIN_SEVIYE_HACIM:
         log.info(
-            f"⏭ Hacim yetersiz | "
-            f"Alım={curr['buy_vol']:.1f}  Satım={satis_hacim:.1f} BTC "
-            f"(min {MIN_ALIS_HACIM} BTC) — sinyal atlandı"
+            f"⏭ Seviye hacmi yetersiz | "
+            f"MaxAlım={max_buy_sev:.1f}  MaxSatım={max_sell_sev:.1f} BTC "
+            f"(min {MIN_SEVIYE_HACIM}) — atlandı"
         )
         return
 
+    taraf = "ALIM" if max_buy_sev >= MIN_SEVIYE_HACIM else "SATIM"
+    tetik = max(max_buy_sev, max_sell_sev)
+
     mesajlar = []
 
-    # POC Migration
     if curr["poc"] > prev["poc"]:
         mesajlar.append(
             f"📈 <b>POC YUKARI</b>\n"
             f"BTCUSDT PERP | {INTERVAL}\n"
             f"POC: {prev['poc']} → {curr['poc']}\n"
-            f"CVD: {curr['cvd']:+.2f} | Fiyat: {curr['close']}"
+            f"CVD: {curr['cvd']:+.2f} | Fiyat: {curr['close']}\n"
+            f"🔥 {taraf} tarafı | Tek seviyede {tetik:.1f} BTC"
         )
     elif curr["poc"] < prev["poc"]:
         mesajlar.append(
             f"📉 <b>POC AŞAĞI</b>\n"
             f"BTCUSDT PERP | {INTERVAL}\n"
             f"POC: {prev['poc']} → {curr['poc']}\n"
-            f"CVD: {curr['cvd']:+.2f} | Fiyat: {curr['close']}"
+            f"CVD: {curr['cvd']:+.2f} | Fiyat: {curr['close']}\n"
+            f"🔥 {taraf} tarafı | Tek seviyede {tetik:.1f} BTC"
         )
 
-    # Boğa Yorulması
     if curr["high"] > prev["high"] > prev2["high"] and curr["poc"] < prev["poc"]:
         mesajlar.append(
             f"⚡ <b>BOĞA YORULMASI</b>\n"
             f"BTCUSDT PERP | {INTERVAL}\n"
             f"Fiyat yeni zirve: {curr['high']}\n"
             f"Ama POC düştü: {prev['poc']} → {curr['poc']}\n"
-            f"⚠️ Olası dönüş sinyali!"
+            f"⚠️ Olası dönüş! | {taraf}: {tetik:.1f} BTC"
         )
 
-    # Ayı Absorpsiyonu
     if curr["low"] < prev["low"] < prev2["low"] and curr["poc"] > prev["poc"]:
         mesajlar.append(
             f"🛡 <b>AYI ABSORPSIYONU</b>\n"
             f"BTCUSDT PERP | {INTERVAL}\n"
             f"Fiyat yeni dip: {curr['low']}\n"
             f"Ama POC yükseldi: {prev['poc']} → {curr['poc']}\n"
-            f"💡 Güçlü destek sinyali!"
+            f"💡 Güçlü destek! | {taraf}: {tetik:.1f} BTC"
         )
 
     for m in mesajlar:
@@ -132,21 +135,21 @@ async def sinyal_kontrol(session):
         last_alert = time.time()
 
 
-# ── Ana döngü ─────────────────────────────────
 async def calistir():
+    global seviye_hacim
+
     stream = (
         f"wss://fstream.binance.com/stream?streams="
         f"{SEMBOL}@kline_{INTERVAL}/{SEMBOL}@aggTrade"
     )
     log.info(f"🚀 Başlatıldı | BTCUSDT PERP | {INTERVAL}")
-    log.info(f"📱 Telegram chat: {TELEGRAM_CHAT}")
+    log.info(f"📱 Telegram: {TELEGRAM_CHAT} | Min seviye: {MIN_SEVIYE_HACIM} BTC")
 
     async with aiohttp.ClientSession() as session:
-        # Başlangıç mesajı
         await telegram(session,
             f"✅ <b>POC Sinyal Botu Başladı</b>\n"
-            f"Sembol: BTCUSDT PERP\n"
-            f"Interval: {INTERVAL}\n"
+            f"Sembol: BTCUSDT PERP | {INTERVAL}\n"
+            f"Filtre: Tek fiyat seviyesinde ≥{MIN_SEVIYE_HACIM} BTC alım VEYA satım\n"
             f"Sinyaller burada görünecek 👇"
         )
 
@@ -159,41 +162,49 @@ async def calistir():
                         tip  = data.get("stream", "")
                         d    = data.get("data", {})
 
-                        # Tick biriktir
                         if "aggTrade" in tip:
                             fiyat  = float(d["p"])
                             miktar = float(d["q"])
                             alis   = not d["m"]
-                            tick_prices.append(fiyat)
-                            tick_buys.append(miktar if alis else 0.0)
-                            tick_sells.append(0.0 if alis else miktar)
+                            sev    = seviyele(fiyat)
+                            if alis:
+                                seviye_hacim[sev]["buy"]  += miktar
+                            else:
+                                seviye_hacim[sev]["sell"] += miktar
 
-                        # Mum kapandı
                         elif "kline" in tip and d["k"]["x"]:
                             k = d["k"]
-                            poc = poc_hesapla(tick_prices, tick_buys, tick_sells)
+
+                            poc = poc_hesapla(seviye_hacim)
                             if poc == 0.0:
                                 poc = round(
                                     (float(k["h"]) + float(k["l"]) + float(k["c"])) / 3, 2
                                 )
-                            cvd = sum(tick_buys) - sum(tick_sells)
+
+                            max_buy, max_sell = max_seviye_hacim(seviye_hacim)
+                            cvd = sum(v["buy"] - v["sell"] for v in seviye_hacim.values())
+
                             bar = {
-                                "open":  float(k["o"]),
-                                "high":  float(k["h"]),
-                                "low":   float(k["l"]),
-                                "close": float(k["c"]),
-                                "vol":   float(k["v"]),
-                                "buy_vol": float(k["V"]),
-                                "poc":   poc,
-                                "cvd":   round(cvd, 2),
+                                "open":         float(k["o"]),
+                                "high":         float(k["h"]),
+                                "low":          float(k["l"]),
+                                "close":        float(k["c"]),
+                                "vol":          float(k["v"]),
+                                "poc":          poc,
+                                "cvd":          round(cvd, 2),
+                                "max_buy_sev":  round(max_buy,  2),
+                                "max_sell_sev": round(max_sell, 2),
                             }
                             bars.append(bar)
-                            tick_prices.clear(); tick_buys.clear(); tick_sells.clear()
+                            seviye_hacim = defaultdict(lambda: {"buy": 0.0, "sell": 0.0})
+
                             log.info(
-                                f"Mum kapandı | C={bar['close']} "
-                                f"POC={bar['poc']} CVD={bar['cvd']:+.2f} "
-                                f"Alım={bar['buy_vol']:.1f} BTC"
+                                f"Mum kapandı | C={bar['close']} POC={bar['poc']} "
+                                f"CVD={bar['cvd']:+.2f} | "
+                                f"MaxAlım={bar['max_buy_sev']:.1f} "
+                                f"MaxSatım={bar['max_sell_sev']:.1f} BTC"
                             )
+
                             await sinyal_kontrol(session)
 
             except Exception as e:
