@@ -79,9 +79,10 @@ async def sinyal_kontrol(session):
 
     curr, prev, prev2 = bars[-1], bars[-2], bars[-3]
 
-    # 200 BTC altı alım hacminde sinyal gönderme
-    if curr["buy_vol"] < MIN_ALIS_HACIM:
-        log.info(f"⏭ Alım hacmi düşük ({curr['buy_vol']:.1f} BTC < {MIN_ALIS_HACIM}) — sinyal atlandı")
+    # 200 BTC altı toplam hacimde (alım + satım) sinyal gönderme
+    toplam_hacim = curr["vol"]
+    if toplam_hacim < MIN_ALIS_HACIM:
+        log.info(f"⏭ Toplam hacim düşük ({toplam_hacim:.1f} BTC < {MIN_ALIS_HACIM}) — sinyal atlandı")
         return
 
     mesajlar = []
