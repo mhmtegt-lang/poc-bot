@@ -19,6 +19,7 @@ TELEGRAM_CHAT   = "7133383868"
 SEMBOL          = "btcusdt"          # küçük harf
 INTERVAL        = "5m"              # 1m 3m 5m 15m 1h
 ALERT_COOLDOWN  = 60                 # aynı sinyali kaç saniyede bir tekrarla
+MIN_ALIS_HACIM  = 200                # minimum alım hacmi (BTC) — bu altı sinyal gönderme
 # ══════════════════════════════════════════════
 
 logging.basicConfig(
@@ -77,6 +78,12 @@ async def sinyal_kontrol(session):
         return
 
     curr, prev, prev2 = bars[-1], bars[-2], bars[-3]
+
+    # 200 BTC altı alım hacminde sinyal gönderme
+    if curr["buy_vol"] < MIN_ALIS_HACIM:
+        log.info(f"⏭ Alım hacmi düşük ({curr['buy_vol']:.1f} BTC < {MIN_ALIS_HACIM}) — sinyal atlandı")
+        return
+
     mesajlar = []
 
     # POC Migration
@@ -171,6 +178,7 @@ async def calistir():
                                 "low":   float(k["l"]),
                                 "close": float(k["c"]),
                                 "vol":   float(k["v"]),
+                                "buy_vol": float(k["V"]),
                                 "poc":   poc,
                                 "cvd":   round(cvd, 2),
                             }
@@ -178,7 +186,8 @@ async def calistir():
                             tick_prices.clear(); tick_buys.clear(); tick_sells.clear()
                             log.info(
                                 f"Mum kapandı | C={bar['close']} "
-                                f"POC={bar['poc']} CVD={bar['cvd']:+.2f}"
+                                f"POC={bar['poc']} CVD={bar['cvd']:+.2f} "
+                                f"Alım={bar['buy_vol']:.1f} BTC"
                             )
                             await sinyal_kontrol(session)
 
