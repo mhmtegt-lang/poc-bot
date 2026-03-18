@@ -19,7 +19,7 @@ TELEGRAM_CHAT   = "7133383868"
 SEMBOL          = "btcusdt"          # küçük harf
 INTERVAL        = "5m"              # 1m 3m 5m 15m 1h
 ALERT_COOLDOWN  = 60                 # aynı sinyali kaç saniyede bir tekrarla
-MIN_ALIS_HACIM  = 200                # minimum alım hacmi (BTC) — bu altı sinyal gönderme
+MIN_ALIS_HACIM  = 150                # alım VEYA satım tarafı için minimum BTC hacmi
 # ══════════════════════════════════════════════
 
 logging.basicConfig(
@@ -79,10 +79,14 @@ async def sinyal_kontrol(session):
 
     curr, prev, prev2 = bars[-1], bars[-2], bars[-3]
 
-    # 200 BTC altı toplam hacimde (alım + satım) sinyal gönderme
-    toplam_hacim = curr["vol"]
-    if toplam_hacim < MIN_ALIS_HACIM:
-        log.info(f"⏭ Toplam hacim düşük ({toplam_hacim:.1f} BTC < {MIN_ALIS_HACIM}) — sinyal atlandı")
+    # Alım VEYA satım tarafından biri 150 BTC üzerindeyse sinyal gönder
+    satis_hacim = curr["vol"] - curr["buy_vol"]
+    if curr["buy_vol"] < MIN_ALIS_HACIM and satis_hacim < MIN_ALIS_HACIM:
+        log.info(
+            f"⏭ Hacim yetersiz | "
+            f"Alım={curr['buy_vol']:.1f}  Satım={satis_hacim:.1f} BTC "
+            f"(min {MIN_ALIS_HACIM} BTC) — sinyal atlandı"
+        )
         return
 
     mesajlar = []
