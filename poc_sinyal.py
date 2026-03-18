@@ -20,7 +20,7 @@ TELEGRAM_TOKEN   = "8724532574:AAFqpq8GmEpicc1oKfYfnYNMo7AExT8Y14U"
 TELEGRAM_CHAT    = "7133383868"
 SEMBOL           = "btcusdt"
 INTERVAL         = "5m"
-ESIK_ADIM        = 5       # her 5 BTC'de bir bildirim (5, 10, 15, 20...)
+ESIK_ADIM        = 0.5       # her 0.5 BTC'de bir bildirim (0.5, 1.0, 1.5...)
 TICK_SIZE        = 0.10      # fiyat adımı (10 cent = bir seviye)
 # ══════════════════════════════════════════════
 
